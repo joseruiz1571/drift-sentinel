@@ -1,7 +1,7 @@
 {
-	"name": "<WORKER_NAME>",
+	"name": "drift-sentinel",
 	"main": "src/index.ts",
-	"compatibility_date": "<COMPATIBILITY_DATE>",
+	"compatibility_date": "2026-07-21",
 	"observability": {
 		"enabled": true,
 	},
