@@ -4,11 +4,10 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
 
-    // Temporary probe route — the curl proof for ISC-10/11. Block 4 replaces
-    // this with /report (persisted, cited) once D1 is wired.
+    // /scan: trigger a scan and persist results to D1 (ISC-15)
     if (url.pathname === "/scan") {
-      const results = await scanZone(env);
-      return Response.json(results);
+      const snapshot = await scanZone(env);
+      return Response.json(snapshot);
     }
 
     return new Response("Drift Sentinel — try /scan\n");

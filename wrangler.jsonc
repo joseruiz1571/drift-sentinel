@@ -5,8 +5,21 @@
 	"observability": {
 		"enabled": true,
 	},
-      "vars": {
-              "ZONE_ID": "838bd540f4c21f053378ea01854d9363",
-              "ACCOUNT_ID": "6ec167e46bad7e8619cdc7d053c38073"
-      },
+	"vars": {
+		"ZONE_ID": "838bd540f4c21f053378ea01854d9363",
+		"ACCOUNT_ID": "6ec167e46bad7e8619cdc7d053c38073"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "drift-sentinel",
+			"database_id": "drift-sentinel"
+		}
+	],
+	"migrations": [
+		{
+			"path": "migrations",
+			"database_name": "drift-sentinel"
+		}
+	]
 }

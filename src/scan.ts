@@ -14,6 +14,11 @@ export interface ScanResult {
   detail?: string; // error reason, only present when status === "error"
 }
 
+export interface ScanSnapshot {
+  scan_id: string;
+  results: ScanResult[];
+}
+
 const CF_API = "https://api.cloudflare.com/client/v4";
 
 interface CfEnvelope {
@@ -62,10 +67,38 @@ function readObserved(kind: Control["kind"], result: unknown): string {
   }
 }
 
+// ISC-15: Store one row per control. scan_id is a unique identifier for this run.
+async function storeSnapshot(
+  db: D1Database,
+  scanId: string,
+  timestamp: number,
+  results: ScanResult[],
+): Promise<void> {
+  const stmt = db.prepare(`
+    INSERT INTO snapshots (scan_id, scan_timestamp, control_id, observed, expected, status, detail)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const r of results) {
+    await stmt.bind(
+      scanId,
+      timestamp,
+      r.id,
+      r.observed,
+      r.expected.join(","),
+      r.status,
+      r.detail ?? null,
+    ).run();
+  }
+}
+
 // Scan every control against the live zone. Fetches run concurrently — six
 // subrequests, well inside the Free-plan subrequest budget.
-export async function scanZone(env: Env): Promise<ScanResult[]> {
-  return Promise.all(
+export async function scanZone(env: Env): Promise<ScanSnapshot> {
+  const scanId = `scan-${Date.now()}`;
+  const timestamp = Date.now();
+
+  const results = await Promise.all(
     CONTROLS.map(async (control): Promise<ScanResult> => {
       const base = {
         id: control.id,
@@ -93,4 +126,9 @@ export async function scanZone(env: Env): Promise<ScanResult[]> {
       }
     }),
   );
+
+  // ISC-15: Persist snapshot (one row per control)
+  await storeSnapshot(env.DB, scanId, timestamp, results);
+
+  return { scan_id: scanId, results };
 }

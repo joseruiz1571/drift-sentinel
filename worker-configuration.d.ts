@@ -9,6 +9,7 @@ declare namespace Cloudflare {
 		ZONE_ID: "838bd540f4c21f053378ea01854d9363";
 		ACCOUNT_ID: "6ec167e46bad7e8619cdc7d053c38073";
 		CF_API_TOKEN: string;
+		DB: D1Database;
 	}
 }
 interface Env extends Cloudflare.Env {}
