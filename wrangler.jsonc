@@ -16,6 +16,11 @@
 			"database_id": "drift-sentinel"
 		}
 	],
+	"triggers": {
+		"crons": [
+			"0 */6 * * *"
+		]
+	},
 	"migrations": [
 		{
 			"path": "migrations",

@@ -2,6 +2,11 @@ import { scanZone } from "./scan";
 import { getReport, renderReportHTML } from "./report";
 
 export default {
+  // ISC-21/22: Cron trigger — scan every 6 hours
+  async scheduled(event, env, ctx): Promise<void> {
+    await scanZone(env);
+  },
+
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
 
