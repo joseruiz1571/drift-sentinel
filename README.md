@@ -2,7 +2,7 @@
 
 A Cloudflare-native compliance drift detector. Scans zone security settings against a declared baseline, persists append-only evidence to D1, and serves compliance reports with SOC 2 and ISO 27001 citations.
 
-**Status:** Live at `eggrollindex.com`. Free Cloudflare plan only. $0 marginal cost.
+**Status:** Live at `https://drift-sentinel.builtbyjrv.workers.dev`. Free Cloudflare plan only. $0 marginal cost.
 
 ## Architecture
 
@@ -82,7 +82,7 @@ CREATE TABLE snapshots (
 
 ### Trigger a scan
 ```bash
-curl https://drift-sentinel.workers.dev/scan
+curl https://drift-sentinel.builtbyjrv.workers.dev/scan
 ```
 
 Returns:
@@ -106,19 +106,19 @@ Returns:
 
 ### Get latest compliance report (JSON)
 ```bash
-curl https://drift-sentinel.workers.dev/report
+curl https://drift-sentinel.builtbyjrv.workers.dev/report
 ```
 
 ### Get compliance report as HTML
 ```bash
-curl https://drift-sentinel.workers.dev/report?format=html
+curl https://drift-sentinel.builtbyjrv.workers.dev/report?format=html
 ```
 
-Renders a readable table with status summary, per-control results, and framework citations.
+Renders a readable table with status summary, per-control results, and framework citations. [Example report](docs/report-example.html).
 
 ### Point-in-time query
 ```bash
-curl "https://drift-sentinel.workers.dev/report?asof=2026-08-11T06:00:00Z"
+curl "https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-08-11T06:00:00Z"
 ```
 
 Returns the compliance state as of that timestamp (pulls the latest scan on or before that time).
@@ -163,12 +163,18 @@ To scale beyond one zone: add zone parameter, fan out to parallel Workers, or mi
 3. Authenticate: `bunx wrangler login`
 4. Create a Cloudflare account and register a domain in the dashboard
 5. Create a read-only API token (User Settings → API Tokens)
-6. Deploy: `bunx wrangler deploy`
-7. Test:
-   ```bash
-   curl https://<your-subdomain>.workers.dev/scan
-   curl https://<your-subdomain>.workers.dev/report
-   ```
+6. Store token: `bunx wrangler secret put CF_API_TOKEN`
+7. Fix wrangler.jsonc:
+   - Run `bunx wrangler d1 create drift-sentinel` to create the database
+   - Update `d1_databases[0].database_id` with the ID from the output
+   - Remove the `migrations` section (run migrations manually after deploy)
+8. Deploy: `bunx wrangler deploy`
+9. Run migration: `bunx wrangler d1 execute drift-sentinel --file=./migrations/0001_snapshots.sql --remote`
+10. Test:
+    ```bash
+    curl https://<your-subdomain>.workers.dev/scan
+    curl https://<your-subdomain>.workers.dev/report
+    ```
 
 The cron trigger activates after deploy; first scan will run at the next 6-hour boundary (UTC).
 

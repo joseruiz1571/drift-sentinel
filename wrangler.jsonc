@@ -13,18 +13,12 @@
 		{
 			"binding": "DB",
 			"database_name": "drift-sentinel",
-			"database_id": "drift-sentinel"
+			"database_id": "f86bbf3e-edc0-414e-a039-9a4164d67aea"
 		}
 	],
 	"triggers": {
 		"crons": [
 			"0 */6 * * *"
 		]
-	},
-	"migrations": [
-		{
-			"path": "migrations",
-			"database_name": "drift-sentinel"
-		}
-	]
+	}
 }
