@@ -82,8 +82,12 @@ CREATE TABLE snapshots (
 
 ### Trigger a scan
 ```bash
-curl https://drift-sentinel.builtbyjrv.workers.dev/scan
+curl -X POST https://drift-sentinel.builtbyjrv.workers.dev/scan
+# If SCAN_SECRET is configured (recommended):
+curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://drift-sentinel.builtbyjrv.workers.dev/scan
 ```
+
+`/scan` is POST-only (GET returns 405) — a GET endpoint that writes evidence rows would let any crawler burn subrequest quota and pollute the audit trail. When the optional `SCAN_SECRET` secret is set, requests without the matching bearer token get 401. The cron trigger is unaffected either way.
 
 Returns:
 ```json
@@ -128,9 +132,13 @@ Returns the compliance state as of that timestamp (pulls the latest scan on or b
 **Read-only API token** (ISC-26):
 - Scoped to: `Zone:Read`, `Settings:Read`, `DNS:Read`, `Account:Read`
 - Stored via `wrangler secret put CF_API_TOKEN` (never committed)
-- Verified at startup: `wrangler whoami` confirms account access
+- Verified during setup with `wrangler whoami` and a live `/scan`
 - No literal token appears in code (fetched from Worker env binding)
 - Leaked token risk is minimal (read-only for your zone only)
+
+**Scan trigger secret** (optional):
+- `wrangler secret put SCAN_SECRET` — once set, manual `POST /scan` requires `Authorization: Bearer <SCAN_SECRET>`
+- Local dev: copy `.dev.vars.example` to `.dev.vars` (gitignored)
 
 **Zone ID** (public):
 - `838bd540f4c21f053378ea01854d9363` (eggrollindex.com)
@@ -168,13 +176,18 @@ To scale beyond one zone: add zone parameter, fan out to parallel Workers, or mi
    - Run `bunx wrangler d1 create drift-sentinel` to create the database
    - Update `d1_databases[0].database_id` with the ID from the output
    - Remove the `migrations` section (run migrations manually after deploy)
-8. Deploy: `bunx wrangler deploy`
-9. Run migration: `bunx wrangler d1 execute drift-sentinel --file=./migrations/0001_snapshots.sql --remote`
-10. Test:
+8. Optional but recommended: `bunx wrangler secret put SCAN_SECRET` to gate manual scans
+9. Deploy: `bunx wrangler deploy`
+10. Run migration: `bunx wrangler d1 execute drift-sentinel --file=./migrations/0001_snapshots.sql --remote`
+11. Test:
     ```bash
-    curl https://<your-subdomain>.workers.dev/scan
+    curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://<your-subdomain>.workers.dev/scan
     curl https://<your-subdomain>.workers.dev/report
     ```
+
+## Tests
+
+`bunx vitest run` — the suite runs inside the Workers runtime via `@cloudflare/vitest-pool-workers`: real D1 (migrations applied per test file), the Cloudflare API mocked at the fetch layer. Covers routing, scan auth, drift and API-error detection, snapshot persistence, point-in-time queries, and HTML escaping.
 
 The cron trigger activates after deploy; first scan will run at the next 6-hour boundary (UTC).
 

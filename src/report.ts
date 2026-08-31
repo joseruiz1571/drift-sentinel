@@ -1,4 +1,9 @@
-import { ScanResult } from "./scan";
+import { CONTROLS } from "./baseline";
+
+// Single metadata source: the baseline. Duplicating name/severity/citation
+// maps here would let the report drift from the controls it describes — the
+// one failure mode a drift detector cannot afford in its own code.
+const CONTROL_BY_ID = new Map(CONTROLS.map((c) => [c.id, c]));
 
 export interface ReportSummary {
   scan_id: string;
@@ -24,15 +29,14 @@ export interface ReportSummary {
 // Query snapshots from D1 and build a report
 export async function getReport(
   db: D1Database,
-  asof?: string,
+  asofMs?: number,
 ): Promise<ReportSummary | null> {
-  // Default to latest scan if no asof date provided
+  // Default to latest scan if no asof timestamp provided
   let query: D1PreparedStatement;
   let bindings: unknown[];
 
-  if (asof) {
+  if (asofMs !== undefined) {
     // ISC-19: Point-in-time query: latest snapshot as of timestamp
-    const asofMs = new Date(asof).getTime();
     query = db.prepare(`
       SELECT DISTINCT scan_id FROM snapshots
       WHERE scan_timestamp <= ?
@@ -78,17 +82,20 @@ export async function getReport(
 
   if (!results.results || results.results.length === 0) return null;
 
-  // Map DB rows to report format (need to enrich with control metadata)
-  const controls = results.results.map((row) => ({
-    id: row.control_id,
-    name: controlNameById(row.control_id),
-    status: row.status,
-    observed: row.observed,
-    expected: row.expected,
-    severity: controlSeverityById(row.control_id),
-    citation: controlCitationById(row.control_id),
-    detail: row.detail,
-  }));
+  // Map DB rows to report format, enriched with metadata from the baseline
+  const controls = results.results.map((row) => {
+    const meta = CONTROL_BY_ID.get(row.control_id);
+    return {
+      id: row.control_id,
+      name: meta?.name ?? row.control_id,
+      status: row.status,
+      observed: row.observed,
+      expected: row.expected,
+      severity: meta?.severity ?? "unknown",
+      citation: meta?.citation ?? "unknown",
+      detail: row.detail,
+    };
+  });
 
   const summary = {
     total: controls.length,
@@ -105,43 +112,6 @@ export async function getReport(
   };
 }
 
-// Metadata lookups — hydrate from baseline
-function controlNameById(id: string): string {
-  const names: Record<string, string> = {
-    "CTL-01": "Minimum TLS version",
-    "CTL-02": "Always Use HTTPS",
-    "CTL-03": "Security level",
-    "CTL-04": "Browser integrity check",
-    "CTL-05": "DNSSEC",
-    "CTL-06": "WAF managed ruleset deployed",
-  };
-  return names[id] || id;
-}
-
-function controlSeverityById(id: string): string {
-  const severities: Record<string, string> = {
-    "CTL-01": "high",
-    "CTL-02": "high",
-    "CTL-03": "medium",
-    "CTL-04": "low",
-    "CTL-05": "medium",
-    "CTL-06": "high",
-  };
-  return severities[id] || "unknown";
-}
-
-function controlCitationById(id: string): string {
-  const citations: Record<string, string> = {
-    "CTL-01": "SOC 2 CC6.7; ISO 27001 A.8.24",
-    "CTL-02": "SOC 2 CC6.7; ISO 27001 A.8.24",
-    "CTL-03": "SOC 2 CC6.6; ISO 27001 A.8.9",
-    "CTL-04": "SOC 2 CC6.6; ISO 27001 A.8.23",
-    "CTL-05": "SOC 2 CC6.6; ISO 27001 A.8.20",
-    "CTL-06": "SOC 2 CC6.6; ISO 27001 A.8.20, A.8.23",
-  };
-  return citations[id] || "unknown";
-}
-
 // HTML rendering of report (ISC-18)
 export function renderReportHTML(report: ReportSummary): string {
   const controlsHtml = report.controls
@@ -151,7 +121,8 @@ export function renderReportHTML(report: ReportSummary): string {
       <td class="control-id">${escapeHtml(c.id)}</td>
       <td class="control-name">${escapeHtml(c.name)}</td>
       <td class="status ${c.status}">${c.status.toUpperCase()}</td>
-      <td class="observed">${escapeHtml(c.observed)}</td>
+      <td class="severity">${escapeHtml(c.severity.toUpperCase())}</td>
+      <td class="observed">${escapeHtml(c.observed)}${c.detail ? ` — ${escapeHtml(c.detail)}` : ""}</td>
       <td class="expected">${escapeHtml(c.expected)}</td>
       <td class="citation">${escapeHtml(c.citation)}</td>
     </tr>
@@ -220,6 +191,7 @@ export function renderReportHTML(report: ReportSummary): string {
           <th>ID</th>
           <th>Control</th>
           <th>Status</th>
+          <th>Severity</th>
           <th>Observed</th>
           <th>Expected</th>
           <th>Citation</th>
@@ -231,7 +203,7 @@ export function renderReportHTML(report: ReportSummary): string {
     </table>
 
     <div class="metadata">
-      <p>Drift Sentinel — compliance-as-code for eggrollindex.com</p>
+      <p>Drift Sentinel — compliance-as-code evidence report</p>
     </div>
   </div>
 </body>

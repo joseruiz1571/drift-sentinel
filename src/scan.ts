@@ -68,6 +68,10 @@ function readObserved(kind: Control["kind"], result: unknown): string {
 }
 
 // ISC-15: Store one row per control. scan_id is a unique identifier for this run.
+// The row id must be supplied explicitly: `id TEXT PRIMARY KEY` without NOT NULL
+// is SQLite's one PK that admits NULLs, so omitting it silently writes rows with
+// a useless NULL key. All rows go in one db.batch() — a scan's evidence lands
+// atomically or not at all, never as a partial snapshot.
 async function storeSnapshot(
   db: D1Database,
   scanId: string,
@@ -75,28 +79,32 @@ async function storeSnapshot(
   results: ScanResult[],
 ): Promise<void> {
   const stmt = db.prepare(`
-    INSERT INTO snapshots (scan_id, scan_timestamp, control_id, observed, expected, status, detail)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO snapshots (id, scan_id, scan_timestamp, control_id, observed, expected, status, detail)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  for (const r of results) {
-    await stmt.bind(
-      scanId,
-      timestamp,
-      r.id,
-      r.observed,
-      r.expected.join(","),
-      r.status,
-      r.detail ?? null,
-    ).run();
-  }
+  await db.batch(
+    results.map((r) =>
+      stmt.bind(
+        `${scanId}:${r.id}`,
+        scanId,
+        timestamp,
+        r.id,
+        r.observed,
+        r.expected.join(","),
+        r.status,
+        r.detail ?? null,
+      ),
+    ),
+  );
 }
 
 // Scan every control against the live zone. Fetches run concurrently — six
 // subrequests, well inside the Free-plan subrequest budget.
 export async function scanZone(env: Env): Promise<ScanSnapshot> {
-  const scanId = `scan-${Date.now()}`;
+  // One clock read: scan_id and scan_timestamp must agree by construction.
   const timestamp = Date.now();
+  const scanId = `scan-${timestamp}`;
 
   const results = await Promise.all(
     CONTROLS.map(async (control): Promise<ScanResult> => {

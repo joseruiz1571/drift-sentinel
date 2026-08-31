@@ -1,3 +1,6 @@
 declare module "cloudflare:test" {
-	interface ProvidedEnv extends Env {}
+	// ProvidedEnv controls the type of `import("cloudflare:test").env`
+	interface ProvidedEnv extends Env {
+		TEST_MIGRATIONS: D1Migration[];
+	}
 }
