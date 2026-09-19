@@ -4,6 +4,58 @@ import { getReport, renderReportHTML } from "./report";
 // Hash both sides to a fixed 32-byte digest, then XOR-fold every byte.
 // That avoids short-circuiting on the first mismatch and does not leak the
 // secret's length through comparison time.
+export const REPORT_CACHE_TTL_LATEST_SECONDS = 60;
+export const REPORT_CACHE_TTL_ASOF_SECONDS = 86_400;
+
+// Isolate-local TTL cache. Cloudflare's Cache API is documented as functional
+// for Workers on custom domains and for Pages Functions, not as a guarantee
+// on *.workers.dev (https://developers.cloudflare.com/workers/runtime-apis/cache/).
+// This Worker is served on workers.dev, so repeated hits are absorbed here.
+type ReportCacheEntry = {
+  body: string;
+  status: number;
+  headers: [string, string][];
+  expiresAt: number;
+};
+
+const reportCache = new Map<string, ReportCacheEntry>();
+
+export function clearReportCache(): void {
+  reportCache.clear();
+}
+
+function reportCacheKey(url: URL, format: string): string {
+  const keyUrl = new URL(url.href);
+  keyUrl.searchParams.set("format", format);
+  return keyUrl.toString();
+}
+
+function reportCacheTtlSeconds(asofMs?: number): number {
+  if (asofMs !== undefined && asofMs < Date.now()) {
+    return REPORT_CACHE_TTL_ASOF_SECONDS;
+  }
+  return REPORT_CACHE_TTL_LATEST_SECONDS;
+}
+
+function reportCacheMatch(key: string): Response | null {
+  const entry = reportCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    reportCache.delete(key);
+    return null;
+  }
+  return new Response(entry.body, { status: entry.status, headers: entry.headers });
+}
+
+function reportCachePut(key: string, body: string, response: Response, ttlSeconds: number): void {
+  reportCache.set(key, {
+    body,
+    status: response.status,
+    headers: [...response.headers.entries()],
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  });
+}
+
 export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [left, right] = await Promise.all([
@@ -62,31 +114,45 @@ export default {
         }
       }
 
-      const report = await getReport(env.DB, asofMs);
-      if (!report) {
-        return new Response("No scan data found", { status: 404 });
-      }
-
       // Content negotiation: ?format=html or Accept header
       const format =
         url.searchParams.get("format") ||
         (request.headers.get("Accept")?.includes("text/html") ? "html" : "json");
 
-      if (format === "html") {
-        return new Response(renderReportHTML(report), {
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Content-Security-Policy":
-              "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-          },
-        });
+      // Latest reports: ~60s. Past ?asof= evidence cannot change, so it may live longer.
+      const cacheKey = reportCacheKey(url, format);
+      const cached = reportCacheMatch(cacheKey);
+      if (cached) {
+        return cached;
       }
 
-      return Response.json(report, {
-        headers: { "X-Content-Type-Options": "nosniff" },
-      });
+      const report = await getReport(env.DB, asofMs);
+      if (!report) {
+        return new Response("No scan data found", { status: 404 });
+      }
+
+      const ttl = reportCacheTtlSeconds(asofMs);
+      const cacheControl = `public, s-maxage=${ttl}`;
+      const body = format === "html" ? renderReportHTML(report) : JSON.stringify(report);
+      const headers: Record<string, string> =
+        format === "html"
+          ? {
+              "Content-Type": "text/html; charset=utf-8",
+              "Content-Security-Policy":
+                "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+              "X-Content-Type-Options": "nosniff",
+              "Referrer-Policy": "no-referrer",
+              "Cache-Control": cacheControl,
+            }
+          : {
+              "Content-Type": "application/json",
+              "X-Content-Type-Options": "nosniff",
+              "Cache-Control": cacheControl,
+            };
+
+      const response = new Response(body, { headers });
+      reportCachePut(cacheKey, body, response, ttl);
+      return response;
     }
 
     // ISC-20: Unknown routes return 404

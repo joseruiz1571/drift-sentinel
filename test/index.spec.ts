@@ -7,7 +7,11 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import worker, {
+	clearReportCache,
+	REPORT_CACHE_TTL_ASOF_SECONDS,
+	REPORT_CACHE_TTL_LATEST_SECONDS,
+} from "../src/index";
 import { PUBLIC_ERROR_DETAIL, renderReportHTML, type ReportSummary } from "../src/report";
 
 const WORKER = "https://drift-sentinel.test";
@@ -77,6 +81,7 @@ beforeAll(() => {
 
 afterEach(() => {
 	fetchMock.assertNoPendingInterceptors();
+	clearReportCache();
 });
 
 describe("routing", () => {
@@ -297,6 +302,35 @@ describe("GET /report", () => {
 		const html = await (await SELF.fetch(`${WORKER}/report?format=html`)).text();
 		expect(html).toContain(PUBLIC_ERROR_DETAIL);
 		expect(html).not.toContain(leak);
+	});
+
+	it("serves a repeated /report from cache without another D1 read", async () => {
+		mockCfApi();
+		await SELF.fetch(`${WORKER}/scan`, { method: "POST", headers: AUTH });
+
+		const first = await SELF.fetch(`${WORKER}/report`);
+		expect(first.status).toBe(200);
+		expect(first.headers.get("Cache-Control")).toBe(
+			`public, s-maxage=${REPORT_CACHE_TTL_LATEST_SECONDS}`,
+		);
+		const original = (await first.json()) as ReportSummary;
+
+		await seedRow("scan-after-cache", Date.now() + 1_000, "CTL-01", "9.9", "drift");
+
+		const second = await SELF.fetch(`${WORKER}/report`);
+		const cached = (await second.json()) as ReportSummary;
+		expect(cached.scan_id).toBe(original.scan_id);
+		expect(cached.controls.find((c) => c.id === "CTL-01")?.observed).not.toBe("9.9");
+	});
+
+	it("caches past point-in-time reports longer than latest", async () => {
+		await seedRow("scan-1000", 1000, "CTL-01", "1.2", "pass");
+		const asof = new Date(1500).toISOString();
+		const res = await SELF.fetch(`${WORKER}/report?asof=${asof}`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Cache-Control")).toBe(
+			`public, s-maxage=${REPORT_CACHE_TTL_ASOF_SECONDS}`,
+		);
 	});
 
 	it("answers point-in-time queries from the row that was true at that time", async () => {
