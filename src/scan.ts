@@ -20,6 +20,7 @@ export interface ScanSnapshot {
 }
 
 const CF_API = "https://api.cloudflare.com/client/v4";
+export const CF_FETCH_TIMEOUT_MS = 10_000;
 
 interface CfEnvelope {
   success: boolean;
@@ -29,12 +30,13 @@ interface CfEnvelope {
 
 // Single authenticated GET against the zone. Throws on transport or API error
 // so the caller records `status: "error"` instead of a false observed value.
-async function cfGet(env: Env, path: string): Promise<unknown> {
+async function cfGet(env: Env, path: string, timeoutMs: number): Promise<unknown> {
   const res = await fetch(`${CF_API}/zones/${env.ZONE_ID}/${path}`, {
     headers: {
       Authorization: `Bearer ${env.CF_API_TOKEN}`,
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const body = (await res.json()) as CfEnvelope;
@@ -101,7 +103,11 @@ async function storeSnapshot(
 
 // Scan every control against the live zone. Fetches run concurrently — six
 // subrequests, well inside the Free-plan subrequest budget.
-export async function scanZone(env: Env): Promise<ScanSnapshot> {
+export async function scanZone(
+  env: Env,
+  options?: { fetchTimeoutMs?: number },
+): Promise<ScanSnapshot> {
+  const fetchTimeoutMs = options?.fetchTimeoutMs ?? CF_FETCH_TIMEOUT_MS;
   // One clock read: scan_id and scan_timestamp must agree by construction.
   const timestamp = Date.now();
   const scanId = `scan-${timestamp}`;
@@ -117,7 +123,7 @@ export async function scanZone(env: Env): Promise<ScanSnapshot> {
         citation: control.citation,
       };
       try {
-        const result = await cfGet(env, control.path);
+        const result = await cfGet(env, control.path, fetchTimeoutMs);
         const observed = readObserved(control.kind, result);
         return {
           ...base,

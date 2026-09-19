@@ -13,6 +13,7 @@ import worker, {
 	REPORT_CACHE_TTL_LATEST_SECONDS,
 } from "../src/index";
 import { PUBLIC_ERROR_DETAIL, renderReportHTML, type ReportSummary } from "../src/report";
+import { scanZone } from "../src/scan";
 
 const WORKER = "https://drift-sentinel.test";
 const AUTH = { Authorization: "Bearer test-secret" };
@@ -166,6 +167,24 @@ describe("POST /scan", () => {
 		const tls = snapshot.results.find((r) => r.id === "CTL-01");
 		expect(tls?.status).toBe("drift");
 		expect(tls?.observed).toBe("1.0");
+	});
+
+	it("records a fetch timeout as status=error, never as pass", async () => {
+		const origin = fetchMock.get("https://api.cloudflare.com");
+		for (const path of Object.keys(HEALTHY)) {
+			origin
+				.intercept({
+					method: "GET",
+					path: `/client/v4/zones/${env.ZONE_ID}/${path}`,
+				})
+				.reply(200, JSON.stringify({ success: true, result: HEALTHY[path] }))
+				.delay(150);
+		}
+		const snapshot = await scanZone(env, { fetchTimeoutMs: 20 });
+		expect(snapshot.results).toHaveLength(6);
+		expect(snapshot.results.every((r) => r.status === "error")).toBe(true);
+		expect(snapshot.results.some((r) => r.status === "pass")).toBe(false);
+		expect(snapshot.results.every((r) => r.detail)).toBe(true);
 	});
 
 	it("records an API failure as status=error with detail, never as pass", async () => {
