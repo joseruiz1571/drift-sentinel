@@ -2,46 +2,46 @@
 
 [![CI](https://github.com/joseruiz1571/drift-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/joseruiz1571/drift-sentinel/actions/workflows/ci.yml)
 
-A Cloudflare-native compliance drift detector. Scans zone security settings against a declared baseline, persists append-only evidence to D1, and serves compliance reports with SOC 2 and ISO 27001 citations.
+Drift Sentinel is a Cloudflare Worker that scans one zone (eggrollindex.com) against a six-control security baseline, writes each verdict as an append-only D1 row, and serves a public compliance report. Append-only evidence matters because a later change — to the zone, the scanner, or the story someone tells — cannot rewrite what the system asserted at a given time; "was this zone compliant on this date?" is answered by a row, not a memory.
 
-**Status:** Live at `https://drift-sentinel.builtbyjrv.workers.dev`. Free Cloudflare plan only. $0 marginal cost.
+[![HTML compliance report](docs/report.png)](https://drift-sentinel.builtbyjrv.workers.dev/report?format=html)
+
+Live reports:
+
+- [HTML report](https://drift-sentinel.builtbyjrv.workers.dev/report?format=html)
+- [JSON report](https://drift-sentinel.builtbyjrv.workers.dev/report)
+
+## Before and after
+
+- **Before** (baseline gaps on this zone, never a prior good state): [`/report?asof=2026-09-19T13:00:00Z`](https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-09-19T13:00:00Z)
+- **After:** TODO(jose) — after zone remediations and the next scan, replace this placeholder with a live `/report?asof=<timestamp>` link. Do not invent a timestamp.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Cloudflare Workers (TypeScript, edge-deployed)                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Cron Trigger (every 6 hours)                                   │
-│       │                                                           │
-│       └──> Scan Engine (src/scan.ts)                            │
-│            │ 1. Fetch zone settings from Cloudflare API        │
-│            │ 2. Compare against baseline (src/baseline.ts)     │
-│            │ 3. Return per-control status (pass/drift/error)   │
-│            │                                                     │
-│            └──> D1 Database (append-only snapshots table)      │
-│                  │ One row per control per scan                 │
-│                  │ Indexed by scan_id and timestamp             │
-│                  │ UPDATE/DELETE aborted by D1 triggers         │
-│                  │                                               │
-│                  └──> Report Endpoints                           │
-│                       │ /report (JSON, latest scan)             │
-│                       │ /report?format=html (rendered report)   │
-│                       │ /report?asof=TIMESTAMP (historical)     │
-│                       └──> Compliance citations (SOC 2, ISO)    │
-│                                                                  │
-│  HTTP Handlers                                                   │
-│   • POST /scan (manual trigger)                                 │
-│   • GET /report (latest compliance state)                       │
-│   • GET /report?format=html (readable report)                   │
-│   • GET /report?asof=2026-08-11T00:00:00Z (point-in-time)      │
-│   • 404 on unknown routes                                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  cron["Cron every 6 hours"] --> scan["Scan engine"]
+  post["POST /scan with SCAN_SECRET"] --> scan
+  scan --> api["Cloudflare API<br/>settings, dnssec, rulesets"]
+  scan --> baseline["Six-control baseline"]
+  scan --> d1["D1 snapshots<br/>append-only triggers"]
+  d1 --> report["GET /report<br/>JSON, HTML, ?asof="]
 ```
 
-## Control Baseline
+The Worker is live at `https://drift-sentinel.builtbyjrv.workers.dev` on the Cloudflare Free plan. A cron trigger (`0 */6 * * *`) starts after deploy; the first scheduled scan runs at the next 6-hour UTC boundary.
+
+## Threat model
+
+`/report` is public on purpose. It discloses zone settings that are already observable from outside (TLS minimum, HTTPS redirect, security level, browser check, DNSSEC, whether a managed WAF phase exists). It does not disclose raw Cloudflare API error text, tokens, or account credentials. `POST /scan` is protected by a required `SCAN_SECRET` compared in constant time; an unset secret fails closed with 503. The cron path scans without that secret. A D1 admin can still drop the append-only triggers.
+
+## Non-goals
+
+- Alerting
+- Multiple zones
+- Hash-chained or signed evidence
+- Risk exceptions
+
+## Control baseline
 
 **Six controls**, all Free-plan auditable:
 
@@ -58,9 +58,9 @@ Every control maps to specific Cloudflare APIs (settings, dnssec, rulesets). Dri
 
 The three current findings — minimum TLS 1.0 (CTL-01), Always Use HTTPS off (CTL-02), and DNSSEC disabled (CTL-05) — were never compliant on this zone. They are baseline gaps, not drift from a prior good state.
 
-## Data Model
+## Data model
 
-### Snapshots Table (D1)
+### Snapshots table (D1)
 
 ```sql
 CREATE TABLE snapshots (
@@ -77,14 +77,16 @@ CREATE TABLE snapshots (
 ```
 
 **Append-only constraint:** Migration `0002_append_only.sql` installs `BEFORE UPDATE` and `BEFORE DELETE` triggers on `snapshots` that `RAISE(ABORT)`. New scans INSERT rows; UPDATE and DELETE are rejected by the database, not just by convention. Limit: someone with D1 admin access can still drop the triggers. This design:
-- Preserves audit trail (every decision is a row)
-- Enables point-in-time queries (`?asof=DATE`)
-- Prevents accidental data loss
-- Makes evidence chain auditable
 
-## API Examples
+- Preserves the audit trail (every decision is a row)
+- Enables point-in-time queries (`?asof=`)
+- Prevents accidental data loss
+- Makes the evidence chain auditable
+
+## API examples
 
 ### Trigger a scan
+
 ```bash
 curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://drift-sentinel.builtbyjrv.workers.dev/scan
 ```
@@ -92,6 +94,7 @@ curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://drift-sentinel.buil
 `/scan` is POST-only (GET returns 405) — a GET endpoint that writes evidence rows would let any crawler burn subrequest quota and pollute the audit trail. `SCAN_SECRET` is required: if it is unset or empty, `POST /scan` returns 503 and writes nothing. A missing or wrong bearer token returns 401. The cron trigger scans without a secret.
 
 Returns:
+
 ```json
 {
   "scan_id": "scan-1723391400000",
@@ -104,36 +107,39 @@ Returns:
       "status": "pass",
       "severity": "high",
       "citation": "SOC 2 CC6.7; ISO 27001 A.8.24"
-    },
-    ...
+    }
   ]
 }
 ```
 
-### Get latest compliance report (JSON)
+### Latest compliance report (JSON)
+
 ```bash
 curl https://drift-sentinel.builtbyjrv.workers.dev/report
 ```
 
 `/report` is cached in the Worker isolate for about 60 seconds so repeated hits do not each cost D1 reads. Point-in-time (`?asof=`) responses for a past timestamp are cached for 24 hours, because that evidence cannot change. Cloudflare's Cache API is documented as functional on custom domains and Pages Functions, not as a guarantee on `*.workers.dev`, which is where this Worker is served.
 
-### Get compliance report as HTML
+### Compliance report as HTML
+
 ```bash
 curl https://drift-sentinel.builtbyjrv.workers.dev/report?format=html
 ```
 
-Renders a readable table with status summary, per-control results, and framework citations. [Example report](docs/report-example.html).
+Renders a readable table with status summary, per-control results, and framework citations. See the [live HTML report](https://drift-sentinel.builtbyjrv.workers.dev/report?format=html).
 
 ### Point-in-time query
+
 ```bash
 curl "https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-08-11T06:00:00Z"
 ```
 
 Returns the compliance state as of that timestamp (the latest scan on or before that time). The lookup uses `idx_scans_timestamp` (`scan_timestamp DESC`) with `WHERE scan_timestamp <= ? ORDER BY scan_timestamp DESC LIMIT 1`, then loads that scan's rows via `idx_scan_id`. It does not scan the full table.
 
-## Token Hygiene
+## Token hygiene
 
-**Read-only API token**:
+**Read-only API token:**
+
 - Exact Cloudflare permission names, scoped to the single zone (eggrollindex.com): **Zone Settings Read**, **DNS Read**, **Zone WAF Read**
 - Stored via `wrangler secret put CF_API_TOKEN` (never committed)
 - `wrangler whoami` checks Wrangler's OAuth login, not this API token. Confirm the token by a successful authenticated `POST /scan` that returns observed values.
@@ -141,22 +147,24 @@ Returns the compliance state as of that timestamp (the latest scan on or before 
 - A leaked token cannot change zone settings (read-only, one zone)
 
 **Scan trigger secret** (required for `POST /scan`):
+
 - `wrangler secret put SCAN_SECRET` — `Authorization: Bearer <SCAN_SECRET>`
 - Local dev: copy `.dev.vars.example` to `.dev.vars` (gitignored)
 
 **Zone ID** (public):
+
 - `838bd540f4c21f053378ea01854d9363` (eggrollindex.com)
 - Not secret; publicly derivable from DNS
 
-## Governance Rationale (ISC-25)
+## Governance rationale
 
 Why append-only evidence?
 
 Standard compliance monitoring tunes thresholds on a Tuesday, and the policy the board approves on Wednesday is a different thing than what the system ran last Monday. Append-only snapshots create a documented loop: the system asserts what is true; the assertion is auditable; the assertion binds the evidence trail. If someone asks "was this zone compliant on July 15th?" the answer comes from a row, not a memory.
 
-Drift Sentinel is that pattern applied to zone configuration: **declared state → scan → evidence → report**. Every step is reversible via the query interface. The cron-scanned results are not scrubbed, not aggregated away, not even summarized — they're rows in a table. That's the difference between monitoring and audit readiness.
+Drift Sentinel is that pattern applied to zone configuration: **declared state → scan → evidence → report**. Every step is reversible via the query interface. The cron-scanned results are not scrubbed, not aggregated away, not even summarized — they are rows in a table. That is the difference between monitoring and audit readiness.
 
-## At Scale: What Breaks (ISC-27)
+## At scale: what breaks
 
 This design is validated for a single zone (eggrollindex.com) on Cloudflare's Free plan. Current constraints:
 
@@ -181,6 +189,7 @@ Pages Functions bind the same D1 product and the same daily row limits, so movin
    (`0001_snapshots.sql`, then `0002_append_only.sql`)
 8. Deploy: `bunx wrangler deploy`
 9. The cron trigger starts after deploy; the first scheduled scan runs at the next 6-hour UTC boundary. Or trigger one immediately:
+
     ```bash
     curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://<your-subdomain>.workers.dev/scan
     curl https://<your-subdomain>.workers.dev/report
