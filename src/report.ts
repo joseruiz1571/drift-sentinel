@@ -5,6 +5,10 @@ import { CONTROLS } from "./baseline";
 // one failure mode a drift detector cannot afford in its own code.
 const CONTROL_BY_ID = new Map(CONTROLS.map((c) => [c.id, c]));
 
+// Public /report must not echo raw Cloudflare API error text. The raw
+// `detail` remains in D1 and in the authenticated /scan response.
+export const PUBLIC_ERROR_DETAIL = "Cloudflare API request failed";
+
 export interface ReportSummary {
   scan_id: string;
   scanned_at: string;
@@ -93,7 +97,7 @@ export async function getReport(
       expected: row.expected,
       severity: meta?.severity ?? "unknown",
       citation: meta?.citation ?? "unknown",
-      detail: row.detail,
+      detail: row.status === "error" ? PUBLIC_ERROR_DETAIL : row.detail,
     };
   });
 
@@ -132,7 +136,7 @@ export function renderReportHTML(report: ReportSummary): string {
 
   return `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">

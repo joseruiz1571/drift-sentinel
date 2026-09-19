@@ -74,11 +74,19 @@ export default {
 
       if (format === "html") {
         return new Response(renderReportHTML(report), {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy":
+              "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+          },
         });
       }
 
-      return Response.json(report);
+      return Response.json(report, {
+        headers: { "X-Content-Type-Options": "nosniff" },
+      });
     }
 
     // ISC-20: Unknown routes return 404

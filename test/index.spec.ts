@@ -8,7 +8,7 @@ import {
 } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { renderReportHTML, type ReportSummary } from "../src/report";
+import { PUBLIC_ERROR_DETAIL, renderReportHTML, type ReportSummary } from "../src/report";
 
 const WORKER = "https://drift-sentinel.test";
 const AUTH = { Authorization: "Bearer test-secret" };
@@ -251,6 +251,52 @@ describe("GET /report", () => {
 		const html = await res.text();
 		expect(html).toContain("Drift Sentinel Report");
 		expect(html).toContain("CTL-06");
+		expect(html).toContain('<html lang="en">');
+	});
+
+	it("sets hardening headers on HTML and nosniff on JSON", async () => {
+		mockCfApi();
+		await SELF.fetch(`${WORKER}/scan`, { method: "POST", headers: AUTH });
+
+		const html = await SELF.fetch(`${WORKER}/report?format=html`);
+		expect(html.headers.get("Content-Security-Policy")).toBe(
+			"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+		);
+		expect(html.headers.get("X-Content-Type-Options")).toBe("nosniff");
+		expect(html.headers.get("Referrer-Policy")).toBe("no-referrer");
+
+		const json = await SELF.fetch(`${WORKER}/report`);
+		expect(json.headers.get("X-Content-Type-Options")).toBe("nosniff");
+	});
+
+	it("redacts raw API error text on /report and keeps it on /scan", async () => {
+		const leak = "Unauthorized to access this zone";
+		mockCfApi({ "settings/security_level": { fail: leak } });
+		const scanRes = await SELF.fetch(`${WORKER}/scan`, { method: "POST", headers: AUTH });
+		const snapshot = (await scanRes.json()) as {
+			results: { id: string; status: string; detail?: string }[];
+		};
+		const scanCtl = snapshot.results.find((r) => r.id === "CTL-03");
+		expect(scanCtl?.status).toBe("error");
+		expect(scanCtl?.detail).toContain(leak);
+
+		const stored = await env.DB.prepare(
+			"SELECT detail FROM snapshots WHERE control_id = ? ORDER BY scan_timestamp DESC LIMIT 1",
+		)
+			.bind("CTL-03")
+			.first<{ detail: string }>();
+		expect(stored?.detail).toContain(leak);
+
+		const reportRes = await SELF.fetch(`${WORKER}/report`);
+		const report = (await reportRes.json()) as ReportSummary;
+		const reportCtl = report.controls.find((c) => c.id === "CTL-03");
+		expect(reportCtl?.status).toBe("error");
+		expect(reportCtl?.detail).toBe(PUBLIC_ERROR_DETAIL);
+		expect(JSON.stringify(report)).not.toContain(leak);
+
+		const html = await (await SELF.fetch(`${WORKER}/report?format=html`)).text();
+		expect(html).toContain(PUBLIC_ERROR_DETAIL);
+		expect(html).not.toContain(leak);
 	});
 
 	it("answers point-in-time queries from the row that was true at that time", async () => {
