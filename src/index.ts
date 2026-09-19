@@ -6,6 +6,9 @@ import { getReport, renderReportHTML } from "./report";
 // secret's length through comparison time.
 export const REPORT_CACHE_TTL_LATEST_SECONDS = 60;
 export const REPORT_CACHE_TTL_ASOF_SECONDS = 86_400;
+// Hard bound: latest JSON + HTML plus a modest set of ?asof= windows.
+// Unique query strings must not be allowed to grow this Map without limit.
+export const REPORT_CACHE_MAX_ENTRIES = 64;
 
 // Isolate-local TTL cache. Cloudflare's Cache API is documented as functional
 // for Workers on custom domains and for Pages Functions, not as a guarantee
@@ -24,10 +27,19 @@ export function clearReportCache(): void {
   reportCache.clear();
 }
 
-function reportCacheKey(url: URL, format: string): string {
-  const keyUrl = new URL(url.href);
-  keyUrl.searchParams.set("format", format);
-  return keyUrl.toString();
+export function reportCacheSize(): number {
+  return reportCache.size;
+}
+
+function reportFormat(request: Request, url: URL): "html" | "json" {
+  const requested = url.searchParams.get("format");
+  if (requested === "html") return "html";
+  if (requested === "json") return "json";
+  return request.headers.get("Accept")?.includes("text/html") ? "html" : "json";
+}
+
+function reportCacheKey(format: "html" | "json", asofMs?: number): string {
+  return asofMs === undefined ? `latest:${format}` : `asof:${asofMs}:${format}`;
 }
 
 function reportCacheTtlSeconds(asofMs?: number): number {
@@ -44,16 +56,36 @@ function reportCacheMatch(key: string): Response | null {
     reportCache.delete(key);
     return null;
   }
+  reportCache.delete(key);
+  reportCache.set(key, entry);
   return new Response(entry.body, { status: entry.status, headers: entry.headers });
 }
 
+function evictExpiredAndOverflow(): void {
+  const now = Date.now();
+  for (const [key, entry] of reportCache) {
+    if (entry.expiresAt <= now) {
+      reportCache.delete(key);
+    }
+  }
+  while (reportCache.size > REPORT_CACHE_MAX_ENTRIES) {
+    const oldest = reportCache.keys().next().value;
+    if (oldest === undefined) break;
+    reportCache.delete(oldest);
+  }
+}
+
 function reportCachePut(key: string, body: string, response: Response, ttlSeconds: number): void {
+  if (reportCache.has(key)) {
+    reportCache.delete(key);
+  }
   reportCache.set(key, {
     body,
     status: response.status,
     headers: [...response.headers.entries()],
     expiresAt: Date.now() + ttlSeconds * 1000,
   });
+  evictExpiredAndOverflow();
 }
 
 export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
@@ -114,13 +146,12 @@ export default {
         }
       }
 
-      // Content negotiation: ?format=html or Accept header
-      const format =
-        url.searchParams.get("format") ||
-        (request.headers.get("Accept")?.includes("text/html") ? "html" : "json");
+      // Content negotiation: ?format=html or Accept header. Extra query
+      // params are ignored so they cannot bust or unbounded-grow the cache.
+      const format = reportFormat(request, url);
 
       // Latest reports: ~60s. Past ?asof= evidence cannot change, so it may live longer.
-      const cacheKey = reportCacheKey(url, format);
+      const cacheKey = reportCacheKey(format, asofMs);
       const cached = reportCacheMatch(cacheKey);
       if (cached) {
         return cached;

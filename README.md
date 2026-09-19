@@ -118,7 +118,7 @@ Returns:
 curl https://drift-sentinel.builtbyjrv.workers.dev/report
 ```
 
-`/report` is cached in the Worker isolate for about 60 seconds so repeated hits do not each cost D1 reads. Point-in-time (`?asof=`) responses for a past timestamp are cached for 24 hours, because that evidence cannot change. Cloudflare's Cache API is documented as functional on custom domains and Pages Functions, not as a guarantee on `*.workers.dev`, which is where this Worker is served.
+`/report` is cached in the Worker isolate for about 60 seconds so repeated hits do not each cost D1 reads. The cache key is the report identity (`latest` or a parsed `?asof=` timestamp, plus `html`/`json`), not the raw URL, so extra query parameters cannot force a miss. The map is capped at 64 entries (LRU). Point-in-time (`?asof=`) responses for a past timestamp are cached for 24 hours, because that evidence cannot change. Cloudflare's Cache API is documented as functional on custom domains and Pages Functions, not as a guarantee on `*.workers.dev`, which is where this Worker is served.
 
 ### Compliance report as HTML
 

@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import worker, {
 	clearReportCache,
+	reportCacheSize,
+	REPORT_CACHE_MAX_ENTRIES,
 	REPORT_CACHE_TTL_ASOF_SECONDS,
 	REPORT_CACHE_TTL_LATEST_SECONDS,
 } from "../src/index";
@@ -376,6 +378,34 @@ describe("GET /report", () => {
 		const cached = (await second.json()) as ReportSummary;
 		expect(cached.scan_id).toBe(original.scan_id);
 		expect(cached.controls.find((c) => c.id === "CTL-01")?.observed).not.toBe("9.9");
+	});
+
+	it("shares one cache entry for the same report regardless of extra query params", async () => {
+		mockCfApi();
+		await SELF.fetch(`${WORKER}/scan`, { method: "POST", headers: AUTH });
+
+		const first = await SELF.fetch(`${WORKER}/report`);
+		const original = (await first.json()) as ReportSummary;
+
+		await seedRow("scan-after-cachebust", Date.now() + 1_000, "CTL-01", "9.9", "drift");
+
+		const busted = await SELF.fetch(`${WORKER}/report?utm_source=x&cb=1`);
+		const cached = (await busted.json()) as ReportSummary;
+		expect(cached.scan_id).toBe(original.scan_id);
+		expect(cached.controls.find((c) => c.id === "CTL-01")?.observed).not.toBe("9.9");
+
+		const asJson = await SELF.fetch(`${WORKER}/report?format=json`);
+		expect(((await asJson.json()) as ReportSummary).scan_id).toBe(original.scan_id);
+	});
+
+	it("hard-bounds the report cache so unique URLs cannot grow it without limit", async () => {
+		for (let i = 0; i < REPORT_CACHE_MAX_ENTRIES + 8; i++) {
+			await seedRow(`scan-bound-${i}`, i * 1_000, "CTL-01", "1.2", "pass");
+			const asof = new Date(i * 1_000 + 500).toISOString();
+			const res = await SELF.fetch(`${WORKER}/report?asof=${asof}&n=${i}`);
+			expect(res.status).toBe(200);
+		}
+		expect(reportCacheSize()).toBeLessThanOrEqual(REPORT_CACHE_MAX_ENTRIES);
 	});
 
 	it("caches past point-in-time reports longer than latest", async () => {
