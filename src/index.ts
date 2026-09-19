@@ -1,8 +1,26 @@
 import { scanZone } from "./scan";
 import { getReport, renderReportHTML } from "./report";
 
+// Hash both sides to a fixed 32-byte digest, then XOR-fold every byte.
+// That avoids short-circuiting on the first mismatch and does not leak the
+// secret's length through comparison time.
+export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b)),
+  ]);
+  const aHash = new Uint8Array(left);
+  const bHash = new Uint8Array(right);
+  let diff = 0;
+  for (let i = 0; i < aHash.byteLength; i++) {
+    diff |= aHash[i] ^ bHash[i];
+  }
+  return diff === 0;
+}
+
 export default {
-  // ISC-21/22: Cron trigger — scan every 6 hours
+  // ISC-21/22: Cron trigger — scan every 6 hours. Cron does not use SCAN_SECRET.
   async scheduled(event, env, ctx): Promise<void> {
     await scanZone(env);
   },
@@ -13,16 +31,18 @@ export default {
     // /scan: trigger a scan and persist results to D1 (ISC-15).
     // POST-only — a GET that writes to the evidence table invites crawlers and
     // drive-by requests to burn subrequest quota and pollute the audit trail.
-    // If SCAN_SECRET is configured, the caller must present it as a bearer token.
+    // SCAN_SECRET is required; an unset or empty secret fails closed with 503.
     if (url.pathname === "/scan") {
       if (request.method !== "POST") {
         return new Response("Method not allowed. Use POST /scan", { status: 405 });
       }
-      if (env.SCAN_SECRET) {
-        const auth = request.headers.get("Authorization");
-        if (auth !== `Bearer ${env.SCAN_SECRET}`) {
-          return new Response("Unauthorized", { status: 401 });
-        }
+      if (!env.SCAN_SECRET) {
+        return new Response("SCAN_SECRET is not configured", { status: 503 });
+      }
+      const presented = request.headers.get("Authorization") ?? "";
+      const expected = `Bearer ${env.SCAN_SECRET}`;
+      if (!(await timingSafeEqual(presented, expected))) {
+        return new Response("Unauthorized", { status: 401 });
       }
       const snapshot = await scanZone(env);
       return Response.json(snapshot);

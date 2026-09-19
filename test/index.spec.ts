@@ -1,5 +1,13 @@
-import { env, fetchMock, SELF } from "cloudflare:test";
+import {
+	createExecutionContext,
+	createScheduledController,
+	env,
+	fetchMock,
+	SELF,
+	waitOnExecutionContext,
+} from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import worker from "../src/index";
 import { renderReportHTML, type ReportSummary } from "../src/report";
 
 const WORKER = "https://drift-sentinel.test";
@@ -96,6 +104,36 @@ describe("POST /scan", () => {
 			headers: { Authorization: "Bearer wrong" },
 		});
 		expect(res.status).toBe(401);
+	});
+
+	it("fails closed with 503 and writes nothing when SCAN_SECRET is unset", async () => {
+		const before = await env.DB.prepare("SELECT COUNT(*) AS total FROM snapshots").first<{
+			total: number;
+		}>();
+		const ctx = createExecutionContext();
+		const res = await worker.fetch(
+			new Request(`${WORKER}/scan`, { method: "POST" }),
+			{ ...env, SCAN_SECRET: "" },
+			ctx,
+		);
+		await waitOnExecutionContext(ctx);
+		expect(res.status).toBe(503);
+		expect(await res.text()).toContain("SCAN_SECRET");
+		const after = await env.DB.prepare("SELECT COUNT(*) AS total FROM snapshots").first<{
+			total: number;
+		}>();
+		expect(after?.total).toBe(before?.total ?? 0);
+	});
+
+	it("cron scheduled() scans without any secret", async () => {
+		mockCfApi();
+		const ctx = createExecutionContext();
+		await worker.scheduled(createScheduledController({ cron: "0 */6 * * *" }), env, ctx);
+		await waitOnExecutionContext(ctx);
+		const rows = await env.DB.prepare("SELECT COUNT(*) AS total FROM snapshots").first<{
+			total: number;
+		}>();
+		expect(rows?.total).toBeGreaterThanOrEqual(6);
 	});
 
 	it("scans a healthy zone: six controls pass and persist with non-null ids", async () => {
