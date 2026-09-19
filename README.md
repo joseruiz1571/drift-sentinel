@@ -56,6 +56,8 @@ A Cloudflare-native compliance drift detector. Scans zone security settings agai
 
 Every control maps to specific Cloudflare APIs (settings, dnssec, rulesets). Drift is detected by comparing observed values against `allowed` values in the baseline.
 
+The three current findings — minimum TLS 1.0 (CTL-01), Always Use HTTPS off (CTL-02), and DNSSEC disabled (CTL-05) — were never compliant on this zone. They are baseline gaps, not drift from a prior good state.
+
 ## Data Model
 
 ### Snapshots Table (D1)
@@ -84,12 +86,10 @@ CREATE TABLE snapshots (
 
 ### Trigger a scan
 ```bash
-curl -X POST https://drift-sentinel.builtbyjrv.workers.dev/scan
-# If SCAN_SECRET is configured (recommended):
 curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://drift-sentinel.builtbyjrv.workers.dev/scan
 ```
 
-`/scan` is POST-only (GET returns 405) — a GET endpoint that writes evidence rows would let any crawler burn subrequest quota and pollute the audit trail. When the optional `SCAN_SECRET` secret is set, requests without the matching bearer token get 401. The cron trigger is unaffected either way.
+`/scan` is POST-only (GET returns 405) — a GET endpoint that writes evidence rows would let any crawler burn subrequest quota and pollute the audit trail. `SCAN_SECRET` is required: if it is unset or empty, `POST /scan` returns 503 and writes nothing. A missing or wrong bearer token returns 401. The cron trigger scans without a secret.
 
 Returns:
 ```json
@@ -129,25 +129,24 @@ Renders a readable table with status summary, per-control results, and framework
 curl "https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-08-11T06:00:00Z"
 ```
 
-Returns the compliance state as of that timestamp (pulls the latest scan on or before that time).
+Returns the compliance state as of that timestamp (the latest scan on or before that time). The lookup uses `idx_scans_timestamp` (`scan_timestamp DESC`) with `WHERE scan_timestamp <= ? ORDER BY scan_timestamp DESC LIMIT 1`, then loads that scan's rows via `idx_scan_id`. It does not scan the full table.
 
 ## Token Hygiene
 
-**Read-only API token** (ISC-26):
-- Scoped to: `Zone:Read`, `Settings:Read`, `DNS:Read`, `Account:Read`
+**Read-only API token**:
+- Exact Cloudflare permission names, scoped to the single zone (eggrollindex.com): **Zone Settings Read**, **DNS Read**, **Zone WAF Read**
 - Stored via `wrangler secret put CF_API_TOKEN` (never committed)
-- Verified during setup with `wrangler whoami` and a live `/scan`
-- No literal token appears in code (fetched from Worker env binding)
-- Leaked token risk is minimal (read-only for your zone only)
+- `wrangler whoami` checks Wrangler's OAuth login, not this API token. Confirm the token by a successful authenticated `POST /scan` that returns observed values.
+- No literal token appears in code (read from the Worker secret binding)
+- A leaked token cannot change zone settings (read-only, one zone)
 
-**Scan trigger secret** (optional):
-- `wrangler secret put SCAN_SECRET` — once set, manual `POST /scan` requires `Authorization: Bearer <SCAN_SECRET>`
+**Scan trigger secret** (required for `POST /scan`):
+- `wrangler secret put SCAN_SECRET` — `Authorization: Bearer <SCAN_SECRET>`
 - Local dev: copy `.dev.vars.example` to `.dev.vars` (gitignored)
 
 **Zone ID** (public):
 - `838bd540f4c21f053378ea01854d9363` (eggrollindex.com)
 - Not secret; publicly derivable from DNS
-- Account ID is similarly safe (account-level read, no modifications)
 
 ## Governance Rationale (ISC-25)
 
@@ -161,29 +160,27 @@ Drift Sentinel is that pattern applied to zone configuration: **declared state �
 
 This design is validated for a single zone (eggrollindex.com) on Cloudflare's Free plan. Current constraints:
 
-- **Subrequests:** Scan makes 6 API calls (one per control). Free plan allows 50/min. Safe for 6-hour intervals (< 1/min average).
-- **D1 writes:** ~6 rows per scan, 4 scans/day = ~24 rows/day. Free plan allows unlimited reads/writes; no row cap.
-- **Query latency:** Point-in-time queries scan full table on each request. Safe to ~10,000 rows (6 months of 4/day scans). After that, add time-based partition or archive old data.
-- **Multiple zones:** Would require parallel scan agents or zone-loop inside a single agent. Free plan Worker size is 1MB; multiple endpoints are feasible but untested.
+- **Subrequests:** A scan makes 6 outbound API calls (one per control). The Free plan limit is **50 subrequests per invocation**, not per minute. A 6-hour cron stays well inside that per-request cap.
+- **D1:** About 6 rows per scan, 4 scans/day ≈ 24 rows written/day. Free-plan D1 allows **5 million rows read/day**, **100,000 rows written/day**, **5 GB** account storage and **500 MB** per database. Row count per table is unlimited except by those storage limits. Daily read/write limits reset at 00:00 UTC.
+- **Query latency:** `?asof=` uses the `scan_timestamp` index (`idx_scans_timestamp`) plus `idx_scan_id`. It is not a full-table scan.
+- **Multiple zones:** Not implemented. Would need a zone parameter and either a loop or parallel Workers.
 
-To scale beyond one zone: add zone parameter, fan out to parallel Workers, or migrate to Pages Functions if D1 limit is hit.
+Pages Functions bind the same D1 product and the same daily row limits, so moving this Worker to Pages does not raise the D1 cap. If a D1 limit is the constraint, archive old snapshots or upgrade the Workers plan.
 
 ## Deployment
 
+`wrangler.jsonc` already names the Worker, the D1 binding (`DB` / `drift-sentinel`), the zone/account vars, and the cron (`0 */6 * * *`). There is no `migrations` key; Wrangler uses the default `./migrations` directory.
+
 1. Fork or clone this repo
 2. Install dependencies: `bun install`
-3. Authenticate: `bunx wrangler login`
-4. Create a Cloudflare account and register a domain in the dashboard
-5. Create a read-only API token (User Settings → API Tokens)
-6. Store token: `bunx wrangler secret put CF_API_TOKEN`
-7. Fix wrangler.jsonc:
-   - Run `bunx wrangler d1 create drift-sentinel` to create the database
-   - Update `d1_databases[0].database_id` with the ID from the output
-   - Remove the `migrations` section (run migrations manually after deploy)
-8. Optional but recommended: `bunx wrangler secret put SCAN_SECRET` to gate manual scans
-9. Deploy: `bunx wrangler deploy`
-10. Run migration: `bunx wrangler d1 execute drift-sentinel --file=./migrations/0001_snapshots.sql --remote`
-11. Test:
+3. Authenticate Wrangler: `bunx wrangler login`
+4. Create a read-only API token (profile → API Tokens) with **Zone Settings Read**, **DNS Read**, and **Zone WAF Read**, scoped to one zone
+5. Store secrets: `bunx wrangler secret put CF_API_TOKEN` and `bunx wrangler secret put SCAN_SECRET`
+6. If you need a new database: `bunx wrangler d1 create drift-sentinel`, then put the returned `database_id` in `d1_databases[0].database_id`
+7. Apply both migrations, in order: `bunx wrangler d1 migrations apply drift-sentinel --remote`  
+   (`0001_snapshots.sql`, then `0002_append_only.sql`)
+8. Deploy: `bunx wrangler deploy`
+9. The cron trigger starts after deploy; the first scheduled scan runs at the next 6-hour UTC boundary. Or trigger one immediately:
     ```bash
     curl -X POST -H "Authorization: Bearer $SCAN_SECRET" https://<your-subdomain>.workers.dev/scan
     curl https://<your-subdomain>.workers.dev/report
@@ -193,13 +190,11 @@ To scale beyond one zone: add zone parameter, fan out to parallel Workers, or mi
 
 `bunx vitest run` — the suite runs inside the Workers runtime via `@cloudflare/vitest-pool-workers`: real D1 (migrations applied per test file), the Cloudflare API mocked at the fetch layer. Covers routing, scan auth, drift and API-error detection, snapshot persistence, point-in-time queries, and HTML escaping.
 
-The cron trigger activates after deploy; first scan will run at the next 6-hour boundary (UTC).
-
 ## Repository
 
 - **License:** MIT
 - **Framework coverage:** SOC 2 CC6.x, ISO 27001 Annex A.8
-- **Code:** TypeScript, no external dependencies (Cloudflare SDK included)
+- **Code:** TypeScript. No runtime dependencies. Zone reads use `fetch()` against the Cloudflare HTTP API; there is no Cloudflare SDK.
 - **Evidence:** Append-only D1 snapshots, point-in-time queryable
 
 ---
