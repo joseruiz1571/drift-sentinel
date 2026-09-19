@@ -1,5 +1,5 @@
 # Copy to .dev.vars for local `wrangler dev`. Never commit .dev.vars.
-# Read-only Cloudflare API token (Zone:Read, Settings:Read, DNS:Read, Account:Read)
+# Read-only Cloudflare API token (Zone Settings Read, DNS Read, Zone WAF Read), scoped to one zone
 CF_API_TOKEN=your-read-only-token
-# Optional: if set, POST /scan requires `Authorization: Bearer <SCAN_SECRET>`
+# Required for POST /scan. Cron still scans without it; an unset secret fails closed (503).
 SCAN_SECRET=choose-a-long-random-string
