@@ -175,6 +175,46 @@ describe("POST /scan", () => {
 	});
 });
 
+describe("append-only snapshots", () => {
+	it("still accepts INSERT", async () => {
+		await seedRow("scan-ins", 10, "CTL-01", "1.2", "pass");
+		const row = await env.DB.prepare(
+			"SELECT observed FROM snapshots WHERE scan_id = ?",
+		)
+			.bind("scan-ins")
+			.first<{ observed: string }>();
+		expect(row?.observed).toBe("1.2");
+	});
+
+	it("aborts UPDATE and leaves the row unchanged", async () => {
+		await seedRow("scan-upd", 11, "CTL-01", "1.2", "pass");
+		await expect(
+			env.DB.prepare("UPDATE snapshots SET observed = 'tamper' WHERE scan_id = ?")
+				.bind("scan-upd")
+				.run(),
+		).rejects.toThrow();
+		const row = await env.DB.prepare(
+			"SELECT observed FROM snapshots WHERE scan_id = ?",
+		)
+			.bind("scan-upd")
+			.first<{ observed: string }>();
+		expect(row?.observed).toBe("1.2");
+	});
+
+	it("aborts DELETE and leaves the row in place", async () => {
+		await seedRow("scan-del", 12, "CTL-01", "1.2", "pass");
+		await expect(
+			env.DB.prepare("DELETE FROM snapshots WHERE scan_id = ?").bind("scan-del").run(),
+		).rejects.toThrow();
+		const row = await env.DB.prepare(
+			"SELECT scan_id FROM snapshots WHERE scan_id = ?",
+		)
+			.bind("scan-del")
+			.first<{ scan_id: string }>();
+		expect(row?.scan_id).toBe("scan-del");
+	});
+});
+
 describe("GET /report", () => {
 	it("returns 404 when no scans exist", async () => {
 		const res = await SELF.fetch(`${WORKER}/report`);

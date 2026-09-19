@@ -21,7 +21,7 @@ A Cloudflare-native compliance drift detector. Scans zone security settings agai
 │            └──> D1 Database (append-only snapshots table)      │
 │                  │ One row per control per scan                 │
 │                  │ Indexed by scan_id and timestamp             │
-│                  │ Zero UPDATE or DELETE paths in code (ISC-16) │
+│                  │ UPDATE/DELETE aborted by D1 triggers         │
 │                  │                                               │
 │                  └──> Report Endpoints                           │
 │                       │ /report (JSON, latest scan)             │
@@ -72,7 +72,7 @@ CREATE TABLE snapshots (
 );
 ```
 
-**Append-only constraint:** Code audit (ISC-16) confirms zero UPDATE or DELETE statements. New scans INSERT rows; old rows never change. This design:
+**Append-only constraint:** Migration `0002_append_only.sql` installs `BEFORE UPDATE` and `BEFORE DELETE` triggers on `snapshots` that `RAISE(ABORT)`. New scans INSERT rows; UPDATE and DELETE are rejected by the database, not just by convention. Limit: someone with D1 admin access can still drop the triggers. This design:
 - Preserves audit trail (every decision is a row)
 - Enables point-in-time queries (`?asof=DATE`)
 - Prevents accidental data loss
