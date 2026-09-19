@@ -1,5 +1,7 @@
 # Drift Sentinel
 
+[![CI](https://github.com/joseruiz1571/drift-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/joseruiz1571/drift-sentinel/actions/workflows/ci.yml)
+
 A Cloudflare-native compliance drift detector. Scans zone security settings against a declared baseline, persists append-only evidence to D1, and serves compliance reports with SOC 2 and ISO 27001 citations.
 
 **Status:** Live at `https://drift-sentinel.builtbyjrv.workers.dev`. Free Cloudflare plan only. $0 marginal cost.
