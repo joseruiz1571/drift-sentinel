@@ -76,7 +76,7 @@ CREATE TABLE snapshots (
 );
 ```
 
-**Append-only constraint:** Migration `0002_append_only.sql` installs `BEFORE UPDATE` and `BEFORE DELETE` triggers on `snapshots` that `RAISE(ABORT)`. New scans INSERT rows; UPDATE and DELETE are rejected by the database, not just by convention. Limit: someone with D1 admin access can still drop the triggers. This design:
+**Append-only constraint:** `0002_append_only.sql` installs `BEFORE UPDATE` and `BEFORE DELETE` triggers on `snapshots`. That is not enough: `INSERT OR REPLACE` / `REPLACE INTO` overwrite an existing primary key without firing those triggers and without raising an error. `0003_block_replace.sql` adds a `BEFORE INSERT` trigger that `RAISE(ABORT)` when `NEW.id` already exists. New scans INSERT rows; UPDATE, DELETE, and REPLACE are rejected by the database. Limit: someone with D1 admin access can still drop the triggers. This design:
 
 - Preserves the audit trail (every decision is a row)
 - Enables point-in-time queries (`?asof=`)
@@ -186,7 +186,7 @@ Pages Functions bind the same D1 product and the same daily row limits, so movin
 5. Store secrets: `bunx wrangler secret put CF_API_TOKEN` and `bunx wrangler secret put SCAN_SECRET`
 6. If you need a new database: `bunx wrangler d1 create drift-sentinel`, then put the returned `database_id` in `d1_databases[0].database_id`
 7. Apply both migrations, in order: `bunx wrangler d1 migrations apply drift-sentinel --remote`  
-   (`0001_snapshots.sql`, then `0002_append_only.sql`)
+   (`0001_snapshots.sql`, then `0002_append_only.sql`, then `0003_block_replace.sql`)
 8. Deploy: `bunx wrangler deploy`
 9. The cron trigger starts after deploy; the first scheduled scan runs at the next 6-hour UTC boundary. Or trigger one immediately:
 

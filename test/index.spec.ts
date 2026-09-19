@@ -237,6 +237,42 @@ describe("append-only snapshots", () => {
 			.first<{ scan_id: string }>();
 		expect(row?.scan_id).toBe("scan-del");
 	});
+
+	it("aborts INSERT OR REPLACE and leaves the existing row unchanged", async () => {
+		await seedRow("scan-repl", 13, "CTL-01", "1.2", "pass");
+		await expect(
+			env.DB.prepare(
+				`INSERT OR REPLACE INTO snapshots (id, scan_id, scan_timestamp, control_id, observed, expected, status, detail)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+				.bind("scan-repl:CTL-01", "scan-repl", 13, "CTL-01", "TAMPERED", "x", "pass", null)
+				.run(),
+		).rejects.toThrow();
+		const row = await env.DB.prepare(
+			"SELECT observed FROM snapshots WHERE scan_id = ?",
+		)
+			.bind("scan-repl")
+			.first<{ observed: string }>();
+		expect(row?.observed).toBe("1.2");
+	});
+
+	it("aborts REPLACE INTO and leaves the existing row unchanged", async () => {
+		await seedRow("scan-rpl2", 14, "CTL-01", "1.2", "pass");
+		await expect(
+			env.DB.prepare(
+				`REPLACE INTO snapshots (id, scan_id, scan_timestamp, control_id, observed, expected, status, detail)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+				.bind("scan-rpl2:CTL-01", "scan-rpl2", 14, "CTL-01", "TAMPERED", "x", "pass", null)
+				.run(),
+		).rejects.toThrow();
+		const row = await env.DB.prepare(
+			"SELECT observed FROM snapshots WHERE scan_id = ?",
+		)
+			.bind("scan-rpl2")
+			.first<{ observed: string }>();
+		expect(row?.observed).toBe("1.2");
+	});
 });
 
 describe("GET /report", () => {
