@@ -158,6 +158,9 @@ dist
 .yarn/install-state.gz
 .pnp.\*
 
+# macOS
+.DS_Store
+
 # wrangler project
 
 .dev.vars*

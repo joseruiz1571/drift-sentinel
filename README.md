@@ -195,7 +195,7 @@ The cron trigger activates after deploy; first scan will run at the next 6-hour 
 
 ## Repository
 
-- **Compliance:** CC BY 4.0
+- **License:** MIT
 - **Framework coverage:** SOC 2 CC6.x, ISO 27001 Annex A.8
 - **Code:** TypeScript, no external dependencies (Cloudflare SDK included)
 - **Evidence:** Append-only D1 snapshots, point-in-time queryable
