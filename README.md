@@ -197,7 +197,7 @@ Pages Functions bind the same D1 product and the same daily row limits, so movin
 
 ## Tests
 
-`bunx vitest run` — the suite runs inside the Workers runtime via `@cloudflare/vitest-pool-workers`: real D1 (migrations applied per test file), the Cloudflare API mocked at the fetch layer. Covers routing, scan auth, drift and API-error detection, snapshot persistence, point-in-time queries, and HTML escaping.
+`bunx vitest run` — the suite runs inside the Workers runtime via `@cloudflare/vitest-pool-workers`: real D1 (migrations applied per test file), the Cloudflare API mocked at the fetch layer. Covers routing; scan auth (401, fail-closed 503, correct token, cron); drift, API-error, and fetch-timeout paths; snapshot persistence; append-only UPDATE/DELETE/REPLACE rejection; point-in-time queries; HTML escaping and `lang="en"`; `/report` hardening headers and error-detail redaction; and `/report` caching (TTL, extra query params sharing one entry, 64-entry bound).
 
 ## Repository
 

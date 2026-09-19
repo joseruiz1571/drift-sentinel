@@ -1,9 +1,6 @@
 import { scanZone } from "./scan";
 import { getReport, renderReportHTML } from "./report";
 
-// Hash both sides to a fixed 32-byte digest, then XOR-fold every byte.
-// That avoids short-circuiting on the first mismatch and does not leak the
-// secret's length through comparison time.
 export const REPORT_CACHE_TTL_LATEST_SECONDS = 60;
 export const REPORT_CACHE_TTL_ASOF_SECONDS = 86_400;
 // Hard bound: latest JSON + HTML plus a modest set of ?asof= windows.
@@ -88,6 +85,9 @@ function reportCachePut(key: string, body: string, response: Response, ttlSecond
   evictExpiredAndOverflow();
 }
 
+// Hash both sides to a fixed 32-byte digest, then XOR-fold every byte.
+// That avoids short-circuiting on the first mismatch and does not leak the
+// secret's length through comparison time.
 export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [left, right] = await Promise.all([
