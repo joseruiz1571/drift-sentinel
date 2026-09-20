@@ -14,7 +14,7 @@ Live reports:
 ## Before and after
 
 - **Before** (baseline gaps on this zone, never a prior good state): [`/report?asof=2026-09-19T13:00:00Z`](https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-09-19T13:00:00Z)
-- **After:** TODO(jose) — after zone remediations and the next scan, replace this placeholder with a live `/report?asof=<timestamp>` link. Do not invent a timestamp.
+- **After** (post-remediation scan `2026-09-20T06:00:17.501Z`, all six controls pass): [`/report?asof=2026-09-20T06:01:00Z`](https://drift-sentinel.builtbyjrv.workers.dev/report?asof=2026-09-20T06:01:00Z)
 
 ## Architecture
 
