@@ -1,4 +1,4 @@
-import { CONTROLS, type Control } from "./baseline";
+import { BASELINE_VERSION, CONTROLS, type Control } from "./baseline";
 
 // One row per control after a scan. `status` is the diff verdict (ISC-11);
 // `error` is a third state so an API failure never masquerades as a pass.
@@ -81,8 +81,8 @@ async function storeSnapshot(
   results: ScanResult[],
 ): Promise<void> {
   const stmt = db.prepare(`
-    INSERT INTO snapshots (id, scan_id, scan_timestamp, control_id, observed, expected, status, detail)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO snapshots (id, scan_id, scan_timestamp, control_id, observed, expected, status, detail, baseline_version, control_name, severity, citation)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   await db.batch(
@@ -96,6 +96,10 @@ async function storeSnapshot(
         r.expected.join(","),
         r.status,
         r.detail ?? null,
+        BASELINE_VERSION,
+        r.name,
+        r.severity,
+        r.citation,
       ),
     ),
   );
@@ -110,7 +114,7 @@ export async function scanZone(
   const fetchTimeoutMs = options?.fetchTimeoutMs ?? CF_FETCH_TIMEOUT_MS;
   // One clock read: scan_id and scan_timestamp must agree by construction.
   const timestamp = Date.now();
-  const scanId = `scan-${timestamp}`;
+  const scanId = `scan-${timestamp}-${crypto.randomUUID()}`;
 
   const results = await Promise.all(
     CONTROLS.map(async (control): Promise<ScanResult> => {

@@ -1,9 +1,4 @@
-import { CONTROLS } from "./baseline";
-
-// Single metadata source: the baseline. Duplicating name/severity/citation
-// maps here would let the report drift from the controls it describes — the
-// one failure mode a drift detector cannot afford in its own code.
-const CONTROL_BY_ID = new Map(CONTROLS.map((c) => [c.id, c]));
+const MAX_SCAN_AGE_MS = (6 * 60 + 30) * 60_000;
 
 // Public /report must not echo raw Cloudflare API error text. The raw
 // `detail` remains in D1 and in the authenticated /scan response.
@@ -12,6 +7,8 @@ export const PUBLIC_ERROR_DETAIL = "Cloudflare API request failed";
 export interface ReportSummary {
   scan_id: string;
   scanned_at: string;
+  baseline_version: string | null;
+  freshness: "current" | "overdue";
   controls: Array<{
     id: string;
     name: string;
@@ -42,17 +39,17 @@ export async function getReport(
   if (asofMs !== undefined) {
     // ISC-19: Point-in-time query: latest snapshot as of timestamp
     query = db.prepare(`
-      SELECT DISTINCT scan_id FROM snapshots
+      SELECT scan_id FROM snapshots
       WHERE scan_timestamp <= ?
-      ORDER BY scan_timestamp DESC
+      ORDER BY scan_timestamp DESC, scan_id DESC
       LIMIT 1
     `);
     bindings = [asofMs];
   } else {
     // Latest scan
     query = db.prepare(`
-      SELECT DISTINCT scan_id FROM snapshots
-      ORDER BY scan_timestamp DESC
+      SELECT scan_id FROM snapshots
+      ORDER BY scan_timestamp DESC, scan_id DESC
       LIMIT 1
     `);
     bindings = [];
@@ -67,7 +64,8 @@ export async function getReport(
   const results = await db
     .prepare(
       `
-    SELECT scan_id, scan_timestamp, control_id, observed, expected, status, detail
+    SELECT scan_id, scan_timestamp, control_id, observed, expected, status, detail,
+           baseline_version, control_name, severity, citation
     FROM snapshots
     WHERE scan_id = ?
     ORDER BY control_id ASC
@@ -82,21 +80,24 @@ export async function getReport(
       expected: string;
       status: "pass" | "drift" | "error";
       detail?: string;
+      baseline_version: string | null;
+      control_name: string | null;
+      severity: string | null;
+      citation: string | null;
     }>();
 
   if (!results.results || results.results.length === 0) return null;
 
-  // Map DB rows to report format, enriched with metadata from the baseline
+  // Only display metadata captured with the observation.
   const controls = results.results.map((row) => {
-    const meta = CONTROL_BY_ID.get(row.control_id);
     return {
       id: row.control_id,
-      name: meta?.name ?? row.control_id,
+      name: row.control_name ?? row.control_id,
       status: row.status,
       observed: row.observed,
       expected: row.expected,
-      severity: meta?.severity ?? "unknown",
-      citation: meta?.citation ?? "unknown",
+      severity: row.severity ?? "unknown",
+      citation: row.citation ?? "unknown",
       detail: row.status === "error" ? PUBLIC_ERROR_DETAIL : row.detail,
     };
   });
@@ -108,8 +109,12 @@ export async function getReport(
     error: controls.filter((c) => c.status === "error").length,
   };
 
+  const now = Date.now();
+  const ageMs = Math.min(asofMs ?? now, now) - results.results[0].scan_timestamp;
   return {
     scan_id: scanId,
+    baseline_version: results.results[0].baseline_version,
+    freshness: ageMs > MAX_SCAN_AGE_MS ? "overdue" : "current",
     scanned_at: new Date(results.results[0].scan_timestamp).toISOString(),
     controls,
     summary,
@@ -169,6 +174,8 @@ export function renderReportHTML(report: ReportSummary): string {
   <div class="container">
     <h1>Drift Sentinel Report</h1>
     <p>Scan: <code>${escapeHtml(report.scan_id)}</code> | Timestamp: ${escapeHtml(report.scanned_at)}</p>
+
+    <p>Scan freshness at report time: <strong>${report.freshness}</strong> · Baseline: ${escapeHtml(report.baseline_version ?? "legacy (metadata unavailable)")}</p>
 
     <div class="summary">
       <div class="summary-card">

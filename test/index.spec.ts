@@ -299,6 +299,7 @@ describe("GET /report", () => {
 
 		const https = report.controls.find((c) => c.id === "CTL-02");
 		expect(https?.status).toBe("drift");
+		expect(report.baseline_version).toBe("2");
 		expect(https?.name).toBe("Always Use HTTPS");
 		expect(https?.citation).toContain("SOC 2 CC6.7");
 	});
@@ -426,6 +427,11 @@ describe("GET /report", () => {
 		const res = await SELF.fetch(`${WORKER}/report?asof=${between}`);
 		const report = (await res.json()) as ReportSummary;
 		expect(report.scan_id).toBe("scan-1000");
+		expect(report.baseline_version).toBeNull();
+		expect(report.controls[0].citation).toBe("unknown");
+		expect(report.freshness).toBe("current");
+		const latest = await SELF.fetch(`${WORKER}/report`);
+		expect(((await latest.json()) as ReportSummary).freshness).toBe("overdue");
 		expect(report.controls[0].observed).toBe("1.2");
 	});
 });
@@ -434,6 +440,8 @@ describe("renderReportHTML", () => {
 	it("escapes hostile observed values so the report cannot XSS itself", () => {
 		const report: ReportSummary = {
 			scan_id: "scan-1",
+			baseline_version: null,
+			freshness: "current",
 			scanned_at: new Date(0).toISOString(),
 			controls: [
 				{

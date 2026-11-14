@@ -52,11 +52,15 @@ The Worker is live at `https://drift-sentinel.builtbyjrv.workers.dev` on the Clo
 | CTL-03 | Security level | medium+ | MEDIUM | SOC 2 CC6.6; ISO 27001 A.8.9 |
 | CTL-04 | Browser integrity check | on | LOW | SOC 2 CC6.6; ISO 27001 A.8.23 |
 | CTL-05 | DNSSEC | active | MEDIUM | SOC 2 CC6.6; ISO 27001 A.8.20 |
-| CTL-06 | WAF managed ruleset | deployed | HIGH | SOC 2 CC6.6; ISO 27001 A.8.20, A.8.23 |
+| CTL-06 | Managed WAF phase | listed | HIGH | SOC 2 CC6.6; ISO 27001 A.8.20, A.8.23 |
+
+CTL-06 checks for the managed-firewall phase in the zone ruleset listing. It does not verify which managed rules execute on a request.
 
 Every control maps to specific Cloudflare APIs (settings, dnssec, rulesets). Drift is detected by comparing observed values against `allowed` values in the baseline.
 
-The three current findings — minimum TLS 1.0 (CTL-01), Always Use HTTPS off (CTL-02), and DNSSEC disabled (CTL-05) — were never compliant on this zone. They are baseline gaps, not drift from a prior good state.
+The three findings recorded before remediation on September 19, 2026 — minimum TLS 1.0 (CTL-01), Always Use HTTPS off (CTL-02), and DNSSEC disabled (CTL-05) — were never compliant on this zone. They are baseline gaps, not drift from a prior good state.
+
+New scans capture the baseline version, control label, severity, and citation with each observation. Legacy reports retain recorded verdicts and expected values and identify unavailable metadata. Reports mark scans older than six hours plus a 30-minute grace period as overdue. Historical queries assess age at the requested time, capped at the present. Scan IDs include the timestamp and a random UUID.
 
 ## Data model
 
@@ -185,8 +189,8 @@ Pages Functions bind the same D1 product and the same daily row limits, so movin
 4. Create a read-only API token (profile → API Tokens) with **Zone Settings Read**, **DNS Read**, and **Zone WAF Read**, scoped to one zone
 5. Store secrets: `bunx wrangler secret put CF_API_TOKEN` and `bunx wrangler secret put SCAN_SECRET`
 6. If you need a new database: `bunx wrangler d1 create drift-sentinel`, then put the returned `database_id` in `d1_databases[0].database_id`
-7. Apply both migrations, in order: `bunx wrangler d1 migrations apply drift-sentinel --remote`  
-   (`0001_snapshots.sql`, then `0002_append_only.sql`, then `0003_block_replace.sql`)
+7. Apply all pending migrations before deploying the Worker: `bunx wrangler d1 migrations apply drift-sentinel --remote`
+   (`0001_snapshots.sql`, then `0002_append_only.sql`, then `0003_block_replace.sql`, then `0004_baseline_metadata.sql`)
 8. Deploy: `bunx wrangler deploy`
 9. The cron trigger starts after deploy; the first scheduled scan runs at the next 6-hour UTC boundary. Or trigger one immediately:
 
