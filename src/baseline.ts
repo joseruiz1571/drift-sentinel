@@ -13,6 +13,8 @@ export interface Control {
 
 // ── The baseline ─────────────────────────────────────────────────────
 
+export const BASELINE_VERSION = "2";
+
 export const CONTROLS: Control[] = [
   {
     id: "CTL-01",
@@ -61,7 +63,7 @@ export const CONTROLS: Control[] = [
   },
   {
     id: "CTL-06",
-    name: "WAF managed ruleset deployed",
+    name: "Managed WAF phase listed",
     kind: "ruleset",
     path: "rulesets",
     allowed: ["http_request_firewall_managed"], // phase that must exist
