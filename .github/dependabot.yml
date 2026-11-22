@@ -1,10 +1,14 @@
+# This project is paused at v1.0.1. Version-update pull requests are off
+# (limit 0). Security updates are not affected by this limit and still open.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
